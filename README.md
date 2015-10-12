@@ -1,9 +1,8 @@
-# KSE-Sample
+# Log factory
 
 ## Introduction
 
-This is a sample of Kafka-Spark streaming-Elasticsearch system.
-This project use to get data from Kafka and deal through Spark streaming and finally store in Elasticsearch.
+Kafka-Spark streaming-Elasticsearch. This project use to get data from Kafka and deal through Spark streaming and finally store in Elasticsearch.
 
 ## Version
 
@@ -30,5 +29,5 @@ z: bug fixed, small feature/improvment
 **Submit example**
 
 ```shell
-# spark-submit --jars /srv/spark/jars/spark-streaming-kafka-assembly_2.10-1.4.1.jar,/srv/spark/jars/elasticsearch-hadoop-2.1.1.jar submit.py network localhost 9999
+# spark-submit --jars /srv/spark/jars/spark-streaming-kafka-assembly_2.10-1.4.1.jar,/srv/spark/jars/elasticsearch-hadoop-2.1.1.jar --py-files /home/xu/work/KSE/adapters.py submit.py network localhost 9999
 ```

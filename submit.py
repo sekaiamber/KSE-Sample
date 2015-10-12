@@ -1,12 +1,12 @@
 from __future__ import print_function
 import sys
-import re
 import json
 from datetime import datetime
 
 from pyspark import SparkContext, SparkConf
 from pyspark.streaming import StreamingContext
 from pyspark.streaming.kafka import KafkaUtils
+from adapters import BaseAdapter, searchClickAdapter
 
 
 ###############
@@ -24,7 +24,7 @@ class Config(object):
     INTERVAL = 1
 
     # es setting
-    ES_NODES = '172.17.0.2'
+    ES_NODES = '172.17.0.4'
     # ES_NODES = '10.10.50.105'
 
     # app setting
@@ -87,7 +87,7 @@ class logDecoder(json.JSONDecoder):
 
 class EsClient(object):
     # es setting
-    ES_NODES = '172.17.0.2'
+    ES_NODES = '172.17.0.4'
     # ES_NODES = '10.10.50.105'
 
     def getESRDD(self, index=None, doc_type=None, query=None):
@@ -106,7 +106,7 @@ class EsClient(object):
                 valueClass="org.elasticsearch.hadoop.mr.LinkedMapWritable",
                 conf=conf)
             return es_rdd
-        except Exception, e:
+        except Exception as e:
             log(e, level='ERROR')
             return None
 
@@ -125,64 +125,9 @@ class EsClient(object):
             conf=conf)
         return True
 
-
 ###############
-# Adapters
+# Deal logic
 ###############
-
-class BaseAdapter(object):
-
-    grok_pattern = r'.+'
-    es_prefix = 'debug-logstash-bzfun-'
-    es_doc_type = 'web'
-
-    def act(self, source):
-        if 'path' not in source:
-            return []
-        g = self.grok(source['path'])
-        if g is None:
-            return []
-        source = self.pretreat(source, extra=g)
-        source = self.build(source)
-        return [source]
-
-    def grok(self, path):
-        m = re.match(self.grok_pattern, path)
-        if m is None:
-            return None
-        else:
-            return m.groupdict()
-
-    def pretreat(self, source, extra={}):
-        for key in extra:
-            source[key] = extra[key]
-        return source
-
-    def build(self, source):
-        return source
-
-
-class searchClickAdapter(BaseAdapter):
-
-    grok_pattern = r'/ping/sc/?'
-    es_prefix = 'debug-logstash-searchclick-'
-    es_doc_type = 'searchclick'
-
-    def build(self, source):
-        ret = {
-            '@timestamp': source.get('@timestamp', None),
-            'type': 'searchclick',
-            'q': None,
-            'sid': None,
-            'path': source.get('path', None)
-        }
-        para = source.get('parameters', None)
-        if para is None:
-            return ret
-        ret['q'] = para.get('q', None)
-        ret['sid'] = para.get('sid', None)
-        return ret
-
 
 def saveEachRDD(rdd, adapter):
     if rdd.isEmpty():
@@ -223,7 +168,7 @@ def kafkaReader(ssc, conf):
 def jsonDecode(line):
     try:
         return logDecoder().decode(line)
-    except Exception, e:
+    except Exception as e:
         return {}
 
 

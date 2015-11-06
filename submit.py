@@ -1,31 +1,28 @@
 from __future__ import print_function
 import sys
 import json
+import logging
 from datetime import datetime
 
 from pyspark import SparkContext, SparkConf
 from pyspark.streaming import StreamingContext
 from pyspark.streaming.kafka import KafkaUtils
-from adapters import BaseAdapter, searchClickAdapter
+import adapters as AllAdapters
 
 
 ###############
 # Config class
 ###############
-
 class Config(object):
     # spark setting
     PROJECT_NAME = 'KSE'
-    # MASTER = 'spark://10.10.114.105:7077'
-    MASTER = 'local[*]'
     EXECUTOR_MEMORY = '1g'
 
     # spark streaming
     INTERVAL = 1
 
     # es setting
-    ES_NODES = '172.17.0.4'
-    # ES_NODES = '10.10.50.105'
+    ES_NODES = None
 
     # app setting
     mode = None
@@ -38,23 +35,25 @@ class Config(object):
     mode_list = ['network', 'kafka']
 
     def __init__(self, args):
-        if len(args) != 4:
-            print("Usage: submit.py <mode> \
-                <hostname or zkQuorum> <port or topic>", file=sys.stderr)
+        if len(args) != 5:
+            stdout("Usage: submit.py <mode> \
+                <hostname or zkQuorum> <port or topic> \
+                <elasticsearch node url>", file=sys.stderr)
             exit(-1)
         self.mode = args[1]
         if self.mode not in self.mode_list:
-            print("<mode> mast be one of [network, kafka]", file=sys.stderr)
+            stdout("<mode> mast be one of [network, kafka]", file=sys.stderr)
             exit(-1)
         if self.mode == 'network':
-            self.hostname, self.port = args[2:]
+            self.hostname, self.port = args[2:4]
         elif self.mode == 'kafka':
-            self.zkQuorum, self.topic = args[2:]
+            self.zkQuorum, self.topic = args[2:4]
+        self.ES_NODES = args[4]
 
     def getSparkConf(self):
         conf = SparkConf()
         conf.setAppName(self.PROJECT_NAME)
-        conf.setMaster(self.MASTER)
+        # conf.setMaster(self.MASTER)
         # conf.set("spark.executor.memory", self.EXECUTOR_MEMORY)
         # es
         conf.set("es.index.auto.create", "true")
@@ -68,7 +67,6 @@ class Config(object):
 ###############
 # Json Decoder
 ###############
-
 class logDecoder(json.JSONDecoder):
 
     def __init__(self):
@@ -84,11 +82,12 @@ class logDecoder(json.JSONDecoder):
 ###############
 # ES
 ###############
-
 class EsClient(object):
     # es setting
-    ES_NODES = '172.17.0.4'
-    # ES_NODES = '10.10.50.105'
+    ES_NODES = None
+
+    def __init__(self, nodes):
+        self.ES_NODES = nodes
 
     def getESRDD(self, index=None, doc_type=None, query=None):
         if index is None or doc_type is None or self.ES_NODES is None:
@@ -125,45 +124,71 @@ class EsClient(object):
             conf=conf)
         return True
 
+
+###############
+# Output
+###############
+def output(msg):
+    logger = logging.getLogger('output')
+    logger.info(msg)
+
+
+def stdout(msg):
+    print(msg)
+
+
 ###############
 # Deal logic
 ###############
-
-def saveEachRDD(rdd, adapter):
+def saveEachRDD(rdd, adapter, conf):
     if rdd.isEmpty():
-        print("%s 0, %s" % (adapter.es_doc_type, datetime.now().strftime('%M:%S')))
+        output("[%s] 0" % adapter.es_doc_type)
         return
     count = rdd.count()
-    EsClient().saveTOES(rdd,
+    EsClient(conf.value.ES_NODES).saveTOES(
+        rdd,
         index=adapter.es_prefix + datetime.now().strftime('%Y.%m.%d'),
         doc_type=adapter.es_doc_type)
-    print("%s %d, %s" % (adapter.es_doc_type, count, datetime.now().strftime('%M:%S')))
+    output("[%s] %d" % (adapter.es_doc_type, count))
 
 
-def dealeach(adapter, lines):
+def dealeach(adapter, lines, conf):
     doing = lines.flatMap(lambda line: adapter.act(line))
     doing = doing.map(lambda item: ('key', item))
-    doing.foreachRDD(lambda rdd: saveEachRDD(rdd, adapter))
+    doing.foreachRDD(lambda rdd: saveEachRDD(rdd, adapter, conf))
 
 
 def deal(lines, conf):
-    adapters = [BaseAdapter(), searchClickAdapter()]
+    adapters = [
+        AllAdapters.BaseAdapter(),
+        AllAdapters.searchClickAdapter(),
+        AllAdapters.recommendclickAdapter(),
+        AllAdapters.playonlineAdapter(),
+        AllAdapters.stickyseriesAdapter(),
+        AllAdapters.viewcountAdapter()
+    ]
     for adapter in adapters:
-        dealeach(adapter, lines)
+        dealeach(adapter, lines, conf)
+
 
 ###############
 # Main logic
 ###############
-
 def networkReader(ssc, conf):
     lines = ssc.socketTextStream(conf.hostname, int(conf.port))
     return lines
 
 
 def kafkaReader(ssc, conf):
-    kvs = KafkaUtils.createStream(ssc, conf.zkQuorum, "spark-streaming-log", {conf.topic: 1})
+    kvs = KafkaUtils.createStream(
+        ssc,
+        conf.zkQuorum,
+        "spark-streaming-log",
+        {conf.topic: 1}
+    )
     lines = kvs.map(lambda x: x[1])
     return lines
+
 
 def jsonDecode(line):
     try:
@@ -182,10 +207,7 @@ def main(sc, ssc, conf):
         lines = networkReader(ssc, conf)
     elif conf.mode == 'kafka':
         lines = kafkaReader(ssc, conf)
-    # counts = lines.flatMap(lambda line: line.split(" "))\
-    #               .map(lambda word: (word, 1))\
-    #               .reduceByKey(lambda a, b: a+b)
-    ES_NODES = sc.broadcast(conf.ES_NODES)
+    conf = sc.broadcast(conf)
     Handler(lines, conf)
 
     ssc.start()
@@ -197,5 +219,15 @@ if __name__ == "__main__":
     spConf = conf.getSparkConf()
     sc = SparkContext(conf=spConf)
     ssc = conf.getStreamingContext(sc)
+    logger = logging.getLogger('output')
+    d = datetime.now().strftime('%Y%m%d%H%M%S')
+    f = logging.FileHandler("/data/logs/KSE/%s.log" % d)
+    logger.addHandler(f)
+    formatter = logging.Formatter(
+        fmt="[%(levelname)s][%(asctime)s]%(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    f.setFormatter(formatter)
+    logger.setLevel(logging.INFO)
 
     main(sc, ssc, conf)

@@ -103,26 +103,31 @@ class playonlineAdapter(BaseAdapter):
     es_doc_type = 'playonline'
 
     def build(self, source):
-        return self.addSpecificParameters(source, [
-            'user_id', 'series_id', 'room_id', 'user_action', 'online_count'
+        ret = self.addSpecificParameters(source, [
+            'user_id', 'series_ids', 'room_id', 'user_action', 'online_count'
         ])
+        si = ret.pop('series_ids')
+        ret['series_id'] = si
+        return ret
 
 
 """
 grok {
-  match => { "path" => "^/admin/series/(?<series_id>\d+)/(?<flag>add_series_to_top|remove_series_from_top)/?" }
+  match => { "path" => "^/admin/categories/(?<categories_id>\d+)/(?<flag>add_series_to_top|remove_series_from_top)/?" }
   add_tag => ["stickyseries"]
 }
 """
 class stickyseriesAdapter(BaseAdapter):
 
-    grok_pattern = r'/admin/series/(?P<series_id>\d+)/(?P<flag>add_series_to_top|remove_series_from_top)/?'
+    grok_pattern = r'/admin/categories/(?P<categories_id>\d+)/(?P<flag>add_series_to_top|remove_series_from_top)/?'
     es_prefix = 'debug-logstash-stickyseries-'
     es_doc_type = 'stickyseries'
 
     def build(self, source):
-        ret = self.addSpecificParameters(source)
-        ret['series_id'] = source['series_id']
+        ret = self.addSpecificParameters(source, [
+            'series_id'
+        ])
+        ret['categories_id'] = source['categories_id']
         ret['series_recommend'] = source['flag'] == 'add_series_to_top'
         return ret
 

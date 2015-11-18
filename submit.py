@@ -53,15 +53,18 @@ class Config(object):
     def getSparkConf(self):
         conf = SparkConf()
         conf.setAppName(self.PROJECT_NAME)
-        # conf.setMaster(self.MASTER)
-        # conf.set("spark.executor.memory", self.EXECUTOR_MEMORY)
+        conf.set(
+            "spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+        conf.set("spark.cleaner.ttl", "300")
         # es
         conf.set("es.index.auto.create", "true")
         conf.set("es.nodes", self.ES_NODES)
         return conf
 
     def getStreamingContext(self, sc):
-        return StreamingContext(sc, self.INTERVAL)
+        ssc = StreamingContext(sc, self.INTERVAL)
+        ssc.remember(240)
+        return ssc
 
 
 ###############
@@ -160,7 +163,7 @@ def dealeach(adapter, lines, conf):
 
 def deal(lines, conf):
     adapters = [
-        AllAdapters.BaseAdapter(),
+        # AllAdapters.BaseAdapter(),
         AllAdapters.searchClickAdapter(),
         AllAdapters.recommendclickAdapter(),
         AllAdapters.playonlineAdapter(),

@@ -2,6 +2,7 @@ from __future__ import print_function
 import sys
 import json
 import logging
+from optparse import OptionParser, OptionGroup
 from datetime import datetime
 
 from pyspark import SparkContext, SparkConf
@@ -16,46 +17,177 @@ import adapters as AllAdapters
 class Config(object):
     # spark setting
     PROJECT_NAME = 'KSE'
-    EXECUTOR_MEMORY = '1g'
+    TTL = None
 
     # spark streaming
     INTERVAL = 1
+    REMEMBER = None
 
     # es setting
     ES_NODES = None
 
     # app setting
     mode = None
+    logpath = None
     hostname = None
     zkQuorum = None
     port = None
     topic = None
-    debug = True
 
+    # options
+    usage = 'Usage: %prog <-m [mode]> [options]'
     mode_list = ['network', 'kafka']
+    parser_system_options = [
+        # system
+        {
+            "short": "-e",
+            "long": "--esnode",
+            "action": "store",
+            "dest": "es",
+            "default": None,
+            "help": "elasticsearch node address",
+            "type": "string"
+        },
+        {
+            "short": "-l",
+            "long": "--log",
+            "action": "store",
+            "dest": "log",
+            "default": '/data/logs/KSE/',
+            "help": "log path(endwith '/')",
+            "type": "string"
+        },
+        {
+            "short": "--spark-cleaner-ttl",
+            "action": "store",
+            "dest": "ttl",
+            "default": "300",
+            "help": "how long will data remain in memory(default 300 seconds)",
+            "type": "string"
+        },
+        {
+            "short": "--ssc-remember",
+            "action": "store",
+            "dest": "sscremember",
+            "default": 240,
+            "help": "how long will spark-streaming context remember \
+                input data or persisted rdds.(default 240 seconds)",
+            "type": "int"
+        },
+        {
+            "short": "--interval",
+            "action": "store",
+            "dest": "interval",
+            "default": 1,
+            "help": "how long is the interval of spark-streaming \
+                getting input data.(default 1 seconds)",
+            "type": "int"
+        },
+    ]
+    parser_options = [
+        # mode
+        {
+            "short": "-m",
+            "long": "--mode",
+            "action": "store",
+            "dest": "mode",
+            "default": None,
+            "help": "KSE mode",
+            "type": "string"
+        },
+        {
+            "short": "--hostname",
+            "action": "store",
+            "dest": "hostname",
+            "default": None,
+            "help": "network mode hostname",
+            "type": "string"
+        },
+        {
+            "short": "--port",
+            "action": "store",
+            "dest": "port",
+            "default": None,
+            "help": "network mode port",
+            "type": "string"
+        },
+        {
+            "short": "--zkquorum",
+            "action": "store",
+            "dest": "zkquorum",
+            "default": None,
+            "help": "kafka mode zkQuorum",
+            "type": "string"
+        },
+        {
+            "short": "--topic",
+            "action": "store",
+            "dest": "topic",
+            "default": None,
+            "help": "kafka mode topic",
+            "type": "string"
+        }
+    ]
 
     def __init__(self, args):
-        if len(args) != 5:
-            stdout("Usage: submit.py <mode> \
-                <hostname or zkQuorum> <port or topic> \
-                <elasticsearch node url>", file=sys.stderr)
-            exit(-1)
-        self.mode = args[1]
+        self.verify(args)
+
+    def verify(self, args):
+        parser = OptionParser(usage=self.usage)
+        for opt in self.parser_options:
+            parser.add_option(
+                opt['short'],
+                opt.get('long', None),
+                action=opt['action'],
+                dest=opt['dest'],
+                default=opt['default'],
+                help=opt['help'],
+                type=opt['type'])
+        group = OptionGroup(
+            parser, "System Options",
+            "Caution: These options usually use default values.")
+        for opt in self.parser_system_options:
+            group.add_option(
+                opt['short'],
+                opt.get('long', None),
+                action=opt['action'],
+                dest=opt['dest'],
+                default=opt['default'],
+                help=opt['help'],
+                type=opt['type'])
+        parser.add_option_group(group)
+        (options, args) = parser.parse_args(args)
+        self.TTL = options.ttl
+        self.INTERVAL = options.interval
+        self.REMEMBER = options.sscremember
+        self.ES_NODES = options.es
+        self.mode = options.mode
+        self.logpath = options.log
+        self.hostname = options.hostname
+        self.zkQuorum = options.zkquorum
+        self.port = options.port
+        self.topic = options.topic
         if self.mode not in self.mode_list:
-            stdout("<mode> mast be one of [network, kafka]", file=sys.stderr)
+            parser.error("-m mast be one of [network, kafka]")
             exit(-1)
-        if self.mode == 'network':
-            self.hostname, self.port = args[2:4]
-        elif self.mode == 'kafka':
-            self.zkQuorum, self.topic = args[2:4]
-        self.ES_NODES = args[4]
+        if self.ES_NODES is None:
+            parser.error("-e should not be null value")
+            exit(-1)
+        if self.mode == 'network' and (
+                self.hostname is None or self.port is None):
+            parser.error("--hostname and --port should not be null value")
+            exit(-1)
+        elif self.mode == 'kafka' and (
+                self.zkQuorum is None or self.topic is None):
+            parser.error("--zkquorum and --topic should not be null value")
+            exit(-1)
 
     def getSparkConf(self):
         conf = SparkConf()
         conf.setAppName(self.PROJECT_NAME)
         conf.set(
             "spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-        conf.set("spark.cleaner.ttl", "300")
+        conf.set("spark.cleaner.ttl", self.TTL)
         # es
         conf.set("es.index.auto.create", "true")
         conf.set("es.nodes", self.ES_NODES)
@@ -63,7 +195,7 @@ class Config(object):
 
     def getStreamingContext(self, sc):
         ssc = StreamingContext(sc, self.INTERVAL)
-        ssc.remember(240)
+        ssc.remember(self.REMEMBER)
         return ssc
 
 
@@ -222,9 +354,10 @@ if __name__ == "__main__":
     spConf = conf.getSparkConf()
     sc = SparkContext(conf=spConf)
     ssc = conf.getStreamingContext(sc)
+    # logger
     logger = logging.getLogger('output')
     d = datetime.now().strftime('%Y%m%d%H%M%S')
-    f = logging.FileHandler("/data/logs/KSE/%s.log" % d)
+    f = logging.FileHandler("%s%s.log" % (conf.logpath, d))
     logger.addHandler(f)
     formatter = logging.Formatter(
         fmt="[%(levelname)s][%(asctime)s]%(message)s",

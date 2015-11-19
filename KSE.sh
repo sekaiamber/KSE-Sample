@@ -78,13 +78,18 @@ start() {
     --conf spark.executor.logs.rolling.maxSize=10000000 \
     --conf spark.executor.logs.rolling.strategy=size \
     --conf "spark.serializer=org.apache.spark.serializer.KryoSerializer" \
-    --conf "spark.cleaner.ttl=300" \
     --conf "spark.executor.extraJavaOptions=-XX:+UseConcMarkSweepGC" \
     --driver-java-options "-XX:+UseConcMarkSweepGC" \
     --driver-memory 2G \
     --files /data/KSE/log4j.properties \
     --jars /opt/spark/jars/spark-streaming-kafka-assembly.jar,/opt/spark/jars/elasticsearch-hadoop.jar \
-    --py-files /data/KSE/adapters.py /data/KSE/submit.py kafka ${ZooKeeperURL} bzfun-app-log ${elasticsearchURL} \
+    --py-files /data/KSE/adapters.py \
+    /data/KSE/submit.py \
+    -m kafka \
+    --zkquorum=${ZooKeeperURL} --topic=bzfun-app-log \
+    -e ${elasticsearchURL} \
+    --spark-cleaner-ttl=300 \
+    --ssc-remember=240 \
     2>&1
 
   check_exec_success "$?" "submit project KSE"

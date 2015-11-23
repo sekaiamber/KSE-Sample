@@ -17,6 +17,8 @@ import adapters as AllAdapters
 class Config(object):
     # spark setting
     PROJECT_NAME = 'KSE'
+    CHECK_POINT = None
+    CHECK_POINT_INTERVAL = None
     TTL = None
 
     # spark streaming
@@ -56,6 +58,22 @@ class Config(object):
             "default": '/data/logs/KSE/',
             "help": "log path(endwith '/')",
             "type": "string"
+        },
+        {
+            "short": "--checkpoint",
+            "action": "store",
+            "dest": "checkpoint",
+            "default": '/data/checkpoint/KSE/',
+            "help": "spark checkpoint directory(endwith '/')",
+            "type": "string"
+        },
+        {
+            "short": "--checkpoint-interval",
+            "action": "store",
+            "dest": "checkpointinterval",
+            "default": 10,
+            "help": "spark checkpoint interval(default 10 seconds)",
+            "type": "int"
         },
         {
             "short": "--spark-cleaner-ttl",
@@ -158,6 +176,8 @@ class Config(object):
         parser.add_option_group(group)
         (options, args) = parser.parse_args(args)
         self.TTL = options.ttl
+        self.CHECK_POINT = options.checkpoint
+        self.CHECK_POINT_INTERVAL = options.checkpointinterval
         self.INTERVAL = options.interval
         self.REMEMBER = options.sscremember
         self.ES_NODES = options.es
@@ -193,10 +213,28 @@ class Config(object):
         conf.set("es.nodes", self.ES_NODES)
         return conf
 
-    def getStreamingContext(self, sc):
-        ssc = StreamingContext(sc, self.INTERVAL)
-        ssc.remember(self.REMEMBER)
-        return ssc
+    def getReader(self, ssc):
+        if self.mode == 'network':
+            lines = self.networkReader(ssc)
+        elif self.mode == 'kafka':
+            lines = self.kafkaReader(ssc)
+        return lines
+
+    def networkReader(self, ssc):
+        lines = ssc.socketTextStream(self.hostname, int(self.port))
+        lines.checkpoint(self.CHECK_POINT_INTERVAL)
+        return lines
+
+    def kafkaReader(self, ssc):
+        kvs = KafkaUtils.createStream(
+            ssc,
+            self.zkQuorum,
+            "spark-streaming-log",
+            {self.topic: 1}
+        )
+        lines = kvs.map(lambda x: x[1])
+        lines.checkpoint(self.CHECK_POINT_INTERVAL)
+        return lines
 
 
 ###############
@@ -259,6 +297,19 @@ class EsClient(object):
             conf=conf)
         return True
 
+    @classmethod
+    def fastSaveTOES(cls, rdd, resource, es):
+        conf = {
+            "es.resource": resource,
+            "es.nodes": es,
+        }
+        rdd.saveAsNewAPIHadoopFile(
+            path='-',
+            outputFormatClass="org.elasticsearch.hadoop.mr.EsOutputFormat",
+            keyClass="org.apache.hadoop.io.NullWritable",
+            valueClass="org.elasticsearch.hadoop.mr.LinkedMapWritable",
+            conf=conf)
+
 
 ###############
 # Output
@@ -275,54 +326,58 @@ def stdout(msg):
 ###############
 # Deal logic
 ###############
-def saveEachRDD(rdd, adapter, conf):
+def linegrok(line):
+    ret = []
+    for adapter in AllAdapters.AdapterHelper.getAdapters():
+        ext = adapter.act(line)
+        if len(ext) > 0:
+            ext = [(adapter.es_doc_type, ('key', i)) for i in ext]
+        ret.extend(ext)
+    return ret
+
+
+def streamingOutput(rdd, es):
     if rdd.isEmpty():
-        output("[%s] 0" % adapter.es_doc_type)
         return
-    count = rdd.count()
-    EsClient(conf.value.ES_NODES).saveTOES(
-        rdd,
-        index=adapter.es_prefix + datetime.now().strftime('%Y.%m.%d'),
-        doc_type=adapter.es_doc_type)
-    output("[%s] %d" % (adapter.es_doc_type, count))
-
-
-def dealeach(adapter, lines, conf):
-    doing = lines.flatMap(lambda line: adapter.act(line))
-    doing = doing.map(lambda item: ('key', item))
-    doing.foreachRDD(lambda rdd: saveEachRDD(rdd, adapter, conf))
+    rdd.persist()
+    for res, key in AllAdapters.AdapterHelper.getAdaptersEsResource():
+        group = rdd.filter(lambda i: i[0] == key).map(lambda i: i[1])
+        if not group.isEmpty():
+            EsClient.fastSaveTOES(group, resource=res, es=es)
+    count = rdd.countByKey().items()
+    for i in count:
+        output("[%s] %d" % (i[0], i[1]))
+    rdd.unpersist()
 
 
 def deal(lines, conf):
-    adapters = [
-        # AllAdapters.BaseAdapter(),
-        AllAdapters.searchClickAdapter(),
-        AllAdapters.recommendclickAdapter(),
-        AllAdapters.playonlineAdapter(),
-        AllAdapters.stickyseriesAdapter(),
-        AllAdapters.viewcountAdapter()
-    ]
-    for adapter in adapters:
-        dealeach(adapter, lines, conf)
+    es = conf.ES_NODES
+    lines = lines.flatMap(linegrok)
+    lines.foreachRDD(lambda rdd: streamingOutput(rdd, es=es))
 
 
 ###############
 # Main logic
 ###############
-def networkReader(ssc, conf):
-    lines = ssc.socketTextStream(conf.hostname, int(conf.port))
-    return lines
+def main(conf):
+    ssc = StreamingContext.getOrCreate(
+        conf.CHECK_POINT,
+        lambda: createContext(conf))
+    ssc.start()
+    ssc.awaitTermination()
+    return ssc
 
 
-def kafkaReader(ssc, conf):
-    kvs = KafkaUtils.createStream(
-        ssc,
-        conf.zkQuorum,
-        "spark-streaming-log",
-        {conf.topic: 1}
-    )
-    lines = kvs.map(lambda x: x[1])
-    return lines
+def createContext(conf):
+    spConf = conf.getSparkConf()
+    sc = SparkContext(conf=spConf)
+    ssc = StreamingContext(sc, conf.INTERVAL)
+    ssc.remember(conf.REMEMBER)
+    # get reader
+    lines = conf.getReader(ssc)
+    lines = lines.map(lambda line: jsonDecode(line))
+    deal(lines, conf)
+    return ssc
 
 
 def jsonDecode(line):
@@ -332,28 +387,8 @@ def jsonDecode(line):
         return {}
 
 
-def Handler(lines, conf):
-    lines = lines.map(lambda line: jsonDecode(line))
-    deal(lines, conf)
-
-
-def main(sc, ssc, conf):
-    if conf.mode == 'network':
-        lines = networkReader(ssc, conf)
-    elif conf.mode == 'kafka':
-        lines = kafkaReader(ssc, conf)
-    conf = sc.broadcast(conf)
-    Handler(lines, conf)
-
-    ssc.start()
-    ssc.awaitTermination()
-
-
 if __name__ == "__main__":
     conf = Config(sys.argv)
-    spConf = conf.getSparkConf()
-    sc = SparkContext(conf=spConf)
-    ssc = conf.getStreamingContext(sc)
     # logger
     logger = logging.getLogger('output')
     d = datetime.now().strftime('%Y%m%d%H%M%S')
@@ -365,5 +400,5 @@ if __name__ == "__main__":
     )
     f.setFormatter(formatter)
     logger.setLevel(logging.INFO)
-
-    main(sc, ssc, conf)
+    # spark
+    main(conf)

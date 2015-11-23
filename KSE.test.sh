@@ -14,6 +14,7 @@ WebuiPort=8080
 # set data dir
 KSEInclude=${CurDir}/jars
 KSELogs='/data/KSE/logs'
+KSECheckpoint='/data/KSE/checkpoint'
 
 update_images() {
   # pull spark-cluster docker image
@@ -27,6 +28,7 @@ start() {
   # update_images
 
   mkdir -p ${KSELogs}
+  mkdir -p ${KSECheckpoint}
 
   # if previous docker container is not exit, kill it
   docker kill KSE 2>/dev/null
@@ -38,6 +40,7 @@ start() {
     -v ${KSEInclude}:/opt/spark/jars \
     -v ${CurDir}:/data/KSE \
     -v ${KSELogs}:/data/logs/KSE \
+    -v ${KSECheckpoint}:/data/checkpoint/KSE \
     --net=host \
     --log-opt max-size=100m \
     --log-opt max-file=9 \
@@ -51,7 +54,7 @@ start() {
     --py-files /data/KSE/adapters.py \
     /data/KSE/submit.py \
     -m network \
-    --hostname=172.17.42.1 --port=9999 \
+    --hostname=172.17.0.1 --port=9999 \
     -e ${elasticsearchURL} \
     --spark-cleaner-ttl=300 \
     --ssc-remember=240 \
@@ -71,7 +74,8 @@ info() {
 }
 
 destroy() {
-  echo "destroy..."
+  rm -r ${KSELogs}
+  rm -r ${KSECheckpoint}
 }
 
 ##################
@@ -86,9 +90,12 @@ case "$1" in
     stop
     start
     ;;
-  destroy) destroy ;;
+  destroy)
+    stop
+    destroy
+    ;;
   *)
-    echo "Usage: ./KSE.sh start|stop|info|restart"
+    echo "Usage: ./KSE.sh start|stop|info|restart|destroy"
     exit 1
     ;;
 esac

@@ -1,45 +1,50 @@
 import re
+from datetime import datetime
 
 
 ###############
 # Adapters
 ###############
-
 class BaseAdapter(object):
 
     grok_pattern = r'.+'
     es_prefix = 'debug-logstash-bzfun-'
     es_doc_type = 'web'
 
-    def act(self, source):
+    @classmethod
+    def act(cls, source):
         if 'path' not in source:
             return []
-        g = self.grok(source['path'])
+        g = cls.grok(source['path'])
         if g is None:
             return []
-        source = self.pretreat(source, extra=g)
-        source = self.build(source)
+        source = cls.pretreat(source, extra=g)
+        source = cls.build(source)
         return [source]
 
-    def grok(self, path):
-        m = re.match(self.grok_pattern, path)
+    @classmethod
+    def grok(cls, path):
+        m = re.match(cls.grok_pattern, path)
         if m is None:
             return None
         else:
             return m.groupdict()
 
-    def pretreat(self, source, extra={}):
+    @classmethod
+    def pretreat(cls, source, extra={}):
         for key in extra:
             source[key] = extra[key]
         return source
 
-    def build(self, source):
+    @classmethod
+    def build(cls, source):
         return source
 
-    def addSpecificParameters(self, source, parms=None):
+    @classmethod
+    def addSpecificParameters(cls, source, parms=None):
         ret = {
             '@timestamp': source.get('@timestamp', None),
-            'type': self.es_doc_type,
+            'type': cls.es_doc_type,
             'path': source.get('path', None)
         }
         if parms is None:
@@ -66,8 +71,9 @@ class searchClickAdapter(BaseAdapter):
     es_prefix = 'debug-logstash-searchclick-'
     es_doc_type = 'searchclick'
 
-    def build(self, source):
-        return self.addSpecificParameters(source, [
+    @classmethod
+    def build(cls, source):
+        return cls.addSpecificParameters(source, [
             'q', 'sid'
         ])
 
@@ -84,8 +90,9 @@ class recommendclickAdapter(BaseAdapter):
     es_prefix = 'debug-logstash-recommendclick-'
     es_doc_type = 'recommendclick'
 
-    def build(self, source):
-        return self.addSpecificParameters(source, [
+    @classmethod
+    def build(cls, source):
+        return cls.addSpecificParameters(source, [
             'user_id', 'series_id', 'sid'
         ])
 
@@ -102,8 +109,9 @@ class playonlineAdapter(BaseAdapter):
     es_prefix = 'debug-logstash-playonline-'
     es_doc_type = 'playonline'
 
-    def build(self, source):
-        ret = self.addSpecificParameters(source, [
+    @classmethod
+    def build(cls, source):
+        ret = cls.addSpecificParameters(source, [
             'user_id', 'series_ids', 'room_id', 'user_action', 'online_count'
         ])
         si = ret.pop('series_ids')
@@ -123,8 +131,9 @@ class stickyseriesAdapter(BaseAdapter):
     es_prefix = 'debug-logstash-stickyseries-'
     es_doc_type = 'stickyseries'
 
-    def build(self, source):
-        ret = self.addSpecificParameters(source, [
+    @classmethod
+    def build(cls, source):
+        ret = cls.addSpecificParameters(source, [
             'series_id'
         ])
         ret['categories_id'] = source['categories_id']
@@ -144,7 +153,37 @@ class viewcountAdapter(BaseAdapter):
     es_prefix = 'debug-logstash-viewcount-'
     es_doc_type = 'viewcount'
 
-    def build(self, source):
-        ret = self.addSpecificParameters(source)
+    @classmethod
+    def build(cls, source):
+        ret = cls.addSpecificParameters(source)
         ret['video_id'] = source['video_id']
         return ret
+
+
+###############
+# Helper
+###############
+class AdapterHelper(object):
+
+    act_adapters = [
+        BaseAdapter,
+        searchClickAdapter,
+        recommendclickAdapter,
+        playonlineAdapter,
+        stickyseriesAdapter,
+        viewcountAdapter
+    ]
+
+    @classmethod
+    def getAdapters(cls):
+        for adp in cls.act_adapters:
+            yield adp
+
+    @classmethod
+    def getAdaptersEsResource(cls):
+        dt = datetime.now().strftime('%Y.%m.%d')
+        for adp in cls.act_adapters:
+            yield ("%s/%s" % (
+                adp.es_prefix + dt,
+                adp.es_doc_type
+            ), adp.es_doc_type)

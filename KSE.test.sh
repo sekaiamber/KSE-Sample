@@ -54,7 +54,7 @@ start() {
     --py-files /data/KSE/adapters.py \
     /data/KSE/submit.py \
     -m network \
-    --hostname=172.17.0.1 --port=9999 \
+    --hostname=172.17.42.1 --port=9999 \
     -e ${elasticsearchURL} \
     --spark-cleaner-ttl=300 \
     --ssc-remember=240 \

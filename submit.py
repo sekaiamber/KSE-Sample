@@ -17,13 +17,15 @@ import adapters as AllAdapters
 class Config(object):
     # spark setting
     PROJECT_NAME = 'KSE'
-    CHECK_POINT = None
+    CHECK_POINT = False
+    CHECK_POINT_PATH = None
     CHECK_POINT_INTERVAL = None
     TTL = None
 
     # spark streaming
     INTERVAL = 1
     REMEMBER = None
+    WINDOW = 10
 
     # es setting
     ES_NODES = None
@@ -61,8 +63,16 @@ class Config(object):
         },
         {
             "short": "--checkpoint",
-            "action": "store",
+            "action": "store_true",
             "dest": "checkpoint",
+            "default": False,
+            "help": "enable spark checkpoint",
+            "type": None
+        },
+        {
+            "short": "--checkpoint-path",
+            "action": "store",
+            "dest": "checkpointpath",
             "default": '/data/checkpoint/KSE/',
             "help": "spark checkpoint directory(endwith '/')",
             "type": "string"
@@ -93,12 +103,22 @@ class Config(object):
             "type": "int"
         },
         {
-            "short": "--interval",
+            "short": "--ssc-window",
+            "action": "store",
+            "dest": "sscwindow",
+            "default": 10,
+            "help": "how long will spark-streaming context window \
+                be. Note this must be multiples of the batch interval \
+                of the value --ssc-interval.(default 10 seconds)",
+            "type": "int"
+        },
+        {
+            "short": "--ssc-interval",
             "action": "store",
             "dest": "interval",
-            "default": 1,
+            "default": 2,
             "help": "how long is the interval of spark-streaming \
-                getting input data.(default 1 seconds)",
+                getting input data.(default 2 seconds)",
             "type": "int"
         },
     ]
@@ -177,9 +197,11 @@ class Config(object):
         (options, args) = parser.parse_args(args)
         self.TTL = options.ttl
         self.CHECK_POINT = options.checkpoint
+        self.CHECK_POINT_PATH = options.checkpointpath
         self.CHECK_POINT_INTERVAL = options.checkpointinterval
         self.INTERVAL = options.interval
         self.REMEMBER = options.sscremember
+        self.WINDOW = options.sscwindow
         self.ES_NODES = options.es
         self.mode = options.mode
         self.logpath = options.log
@@ -222,7 +244,8 @@ class Config(object):
 
     def networkReader(self, ssc):
         lines = ssc.socketTextStream(self.hostname, int(self.port))
-        lines.checkpoint(self.CHECK_POINT_INTERVAL)
+        if self.CHECK_POINT:
+            lines.checkpoint(self.CHECK_POINT_INTERVAL)
         return lines
 
     def kafkaReader(self, ssc):
@@ -233,7 +256,8 @@ class Config(object):
             {self.topic: 1}
         )
         lines = kvs.map(lambda x: x[1])
-        lines.checkpoint(self.CHECK_POINT_INTERVAL)
+        if self.CHECK_POINT:
+            lines.checkpoint(self.CHECK_POINT_INTERVAL)
         return lines
 
 
@@ -360,9 +384,13 @@ def deal(lines, conf):
 # Main logic
 ###############
 def main(conf):
-    ssc = StreamingContext.getOrCreate(
-        conf.CHECK_POINT,
-        lambda: createContext(conf))
+    ssc = None
+    if conf.CHECK_POINT:
+        ssc = StreamingContext.getOrCreate(
+            conf.CHECK_POINT_PATH,
+            lambda: createContext(conf))
+    else:
+        ssc = createContext(conf)
     ssc.start()
     ssc.awaitTermination()
     return ssc
@@ -375,6 +403,8 @@ def createContext(conf):
     ssc.remember(conf.REMEMBER)
     # get reader
     lines = conf.getReader(ssc)
+    # use window
+    lines = lines.window(conf.WINDOW, conf.WINDOW)
     lines = lines.map(lambda line: jsonDecode(line))
     deal(lines, conf)
     return ssc

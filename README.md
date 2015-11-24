@@ -31,7 +31,8 @@ Options:
 
     -e ES, --esnode=ES  elasticsearch node address
     -l LOG, --log=LOG   log path(endwith '/')
-    --checkpoint=CHECKPOINT
+    --checkpoint        enable spark checkpoint
+    --checkpoint-path=CHECKPOINTPATH
                         spark checkpoint directory(endwith '/')
     --checkpoint-interval=CHECKPOINTINTERVAL
                         spark checkpoint interval(default 10 seconds)
@@ -41,9 +42,13 @@ Options:
     --ssc-remember=SSCREMEMBER
                         how long will spark-streaming context remember
                         input data or persisted rdds.(default 240 seconds)
-    --interval=INTERVAL
+    --ssc-window=SSCWINDOW
+                        how long will spark-streaming context window
+                        be. Note this must be multiples of the batch interval
+                        of the value --ssc-interval.(default 10 seconds)
+    --ssc-interval=INTERVAL
                         how long is the interval of spark-streaming
-                        getting input data.(default 1 seconds)
+                        getting input data.(default 2 seconds)
 ```
 Common options:
 
@@ -59,12 +64,15 @@ System options:
 
 | parameter | description | example |
 | ---- | ---- | ---- |
-| -e(--esnode) | List of Elasticsearch nodes to connect to. **Note that the list does not have to contain every node inside the Elasticsearch cluster**. | 172.17.0.1; 172.17.0.1:9200 ; 172.17.0.1:9200,172.17.0.2:9200 |
+| -e(--esnode) | List of Elasticsearch nodes to connect to. **Note that the list does not have to contain every node inside the Elasticsearch cluster**. | 172.17.0.1; 172.17.0.1:9200; 172.17.0.1:9200,172.17.0.2:9200 |
 | -l(--log) | Log path(endwith '/'). **Note that this log is KSE output, not spark itself**. | / |
-| --checkpoint | Spark checkpoint directory(endwith '/') | / |
+| --checkpoint | Enable spark checkpoint | / |
+| --checkpoint-path | Spark checkpoint directory(endwith '/') | / |
+| --checkpoint-interval | Spark checkpoint interval(default 10 seconds) | / |
 | --spark-cleaner-ttl | how long will data remain in memory(default 300 seconds) | / |
 | --ssc-remember | how long will spark-streaming context remember input data or persisted rdds.(default 240 seconds) | / |
-| --interval | how long is the interval of spark-streaming getting input data.(default 1 seconds) | / |
+| --ssc-interval | how long is the interval of spark-streaming getting input data.(default 2 seconds) | / |
+| --ssc-window | how long will spark-streaming context window be. Note this must be multiples of the batch interval of the value --ssc-interval.(default 10 seconds) | / |
 
 **Submit example**
 
